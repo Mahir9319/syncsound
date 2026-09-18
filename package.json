@@ -1,0 +1,14 @@
+{
+  "name": "syncsound-internet",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Internet-based synchronized music rooms",
+  "main": "server.js",
+  "scripts": {"start": "node server.js"},
+  "dependencies": {
+    "express": "^4.21.2",
+    "multer": "^1.4.5-lts.1",
+    "qrcode": "^1.5.4",
+    "ws": "^8.18.0"
+  }
+}

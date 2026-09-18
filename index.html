@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>SyncSound</title>
+<style>
+:root{font-family:system-ui,-apple-system,Segoe UI,sans-serif;color:#f4f6fb;background:#090b10}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;background:linear-gradient(145deg,#090b10,#171b27)}
+main{max-width:720px;margin:auto;padding:22px 16px 42px}
+h1{font-size:35px;margin:5px 0}.sub{color:#9ca5b6;margin:0 0 20px}
+.card{background:#151925;border:1px solid #2a3040;border-radius:20px;padding:18px;margin:14px 0}
+button,label{min-height:48px;border-radius:14px;border:0;padding:0 18px;font-size:15px;font-weight:750;display:inline-flex;align-items:center;justify-content:center;cursor:pointer}
+button{background:#f2f4f8;color:#10131a}.secondary{background:#272d3b;color:#fff}input[type=file]{display:none}
+.row{display:flex;gap:10px;flex-wrap:wrap}.room{font-size:42px;font-weight:900;letter-spacing:8px;margin:8px 0}
+#qr{display:block;width:min(260px,80%);margin:12px auto;background:white;padding:8px;border-radius:14px}
+audio{width:100%;margin:14px 0 5px}.muted{color:#9ca5b6}.status{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.dot{width:9px;height:9px;border-radius:50%;background:#62d48b;display:inline-block;margin-right:7px}
+input[type=text]{width:100%;min-height:50px;border-radius:13px;border:1px solid #343b4b;background:#0e1118;color:#fff;padding:0 14px;font-size:17px;text-transform:uppercase}
+.hidden{display:none}.small{font-size:13px}
+</style>
+</head>
+<body>
+<main>
+<h1>🎵 SyncSound</h1>
+<p class="sub">One room. Multiple phones. Synchronized music over the internet.</p>
+
+<section class="card">
+<div class="status"><b>Connection</b><span id="conn"><span class="dot"></span>Connecting…</span></div>
+<div id="home" style="margin-top:15px">
+<div class="row">
+<button id="create">Create Room</button>
+<button id="showJoin" class="secondary">Join Room</button>
+</div>
+<div id="joinBox" class="hidden" style="margin-top:14px">
+<input id="roomInput" maxlength="6" placeholder="Enter 6-character room code">
+<button id="join" style="margin-top:10px;width:100%">Join</button>
+</div>
+</div>
+<div id="roomBox" class="hidden" style="margin-top:16px">
+<div class="muted small">ROOM CODE</div>
+<div id="room" class="room">------</div>
+<img id="qr" alt="QR code to join this room">
+<div id="joinUrl" class="muted small" style="text-align:center;overflow-wrap:anywhere"></div>
+</div>
+</section>
+
+<section class="card">
+<div class="status"><b>Music</b><span id="role" class="muted">Not in a room</span></div>
+<label id="fileLabel" style="background:#f2f4f8;color:#10131a;margin-top:13px">📂 Select music<input id="file" type="file" accept="audio/*"></label>
+<div id="song" style="margin-top:12px">No music loaded.</div>
+<audio id="player" controls preload="auto"></audio>
+<div class="row">
+<button id="play">▶ Play</button>
+<button id="pause" class="secondary">⏸ Pause</button>
+</div>
+<p class="muted small">Host uploads the selected audio to the room temporarily. Joined phones download it, preload it, then receive a shared future start time.</p>
+</section>
+
+<section class="card">
+<div class="status"><b>Devices</b><span id="devices">0 connected</span></div>
+<p class="muted small">Everyone only needs internet access. They do not need to be on the same Wi‑Fi.</p>
+</section>
+</main>
+
+<script>
+(() => {
+const $=id=>document.getElementById(id);
+const BACKEND="https://syncsound-jt70.onrender.com";
+const ws=new WebSocket(BACKEND.replace(/^http/,"ws"));
+const player=$("player");
+let room="",host=false,offset=0,ready=false,lastState=null;
+
+function send(x){if(ready)ws.send(JSON.stringify(x))}
+function now(){return Date.now()+offset}
+function setConn(t){$("conn").innerHTML='<span class="dot"></span>'+t}
+function showRoom(id){
+ room=id;$("room").textContent=id;$("roomBox").classList.remove("hidden");
+ fetch(`${BACKEND}/api/room/${id}/qr`,{headers:{"X-Frontend-Origin":location.origin}}).then(r=>r.json()).then(j=>{
+   $("qr").src=j.qr;$("joinUrl").textContent=j.joinUrl;
+ });
+ history.replaceState(null,"",`?room=${id}`);
+}
+function setSong(s){
+ $("song").textContent="🎵 "+s.name;
+ if(player.dataset.url!==s.url){
+   player.dataset.url=s.url;player.src=s.url.startsWith("http")?s.url:`${BACKEND}${s.url}`;player.load();
+ }
+}
+function applyState(s){
+ lastState=s;
+ if(s.startAt){
+   const delay=s.startAt-now();
+   setTimeout(()=>{
+     player.currentTime=Math.max(0,Number(s.position)||0);
+     if(s.playing) player.play().catch(()=>{});
+   },Math.max(0,delay));
+ }else{
+   const target=Number(s.position)||0;
+   if(Math.abs(player.currentTime-target)>.15) player.currentTime=target;
+   if(s.playing)player.play().catch(()=>{});else player.pause();
+ }
+}
+ws.onopen=()=>{ready=true;setConn("Connected");send({type:"ping",clientAt:Date.now()})};
+ws.onclose=()=>setConn("Disconnected");
+ws.onmessage=e=>{
+ const m=JSON.parse(e.data);
+ if(m.type==="hello"){offset=m.serverNow-Date.now();send({type:"ping",clientAt:Date.now()})}
+ if(m.type==="pong")offset=m.serverNow-((m.clientAt+Date.now())/2);
+ if(m.type==="created"){host=true;showRoom(m.room);$("role").textContent="👑 Host";$("fileLabel").style.display="inline-flex"}
+ if(m.type==="joined"){room=m.room;showRoom(room);$("role").textContent="📱 Listener";if(m.song)setSong(m.song);if(m.state)applyState(m.state)}
+ if(m.type==="song")setSong(m.song);
+ if(m.type==="sync")applyState(m.state);
+ if(m.type==="devices")$("devices").textContent=m.count+" connected";
+ if(m.type==="error")alert(m.message);
+ if(m.type==="closed")alert(m.message);
+};
+
+$("create").onclick=()=>send({type:"create"});
+$("showJoin").onclick=()=>$("joinBox").classList.toggle("hidden");
+$("join").onclick=()=>{const id=$("roomInput").value.trim().toUpperCase();if(id.length!==6)return alert("Enter the 6-character room code.");send({type:"join",room:id})};
+
+$("file").onchange=async e=>{
+ if(!host||!room)return alert("Create a room first.");
+ const f=e.target.files[0];if(!f)return;
+ if(!f.type.startsWith("audio/"))return alert("Please choose an audio file.");
+ if(f.size>50*1024*1024)return alert("Maximum file size is 50 MB.");
+ const fd=new FormData();fd.append("music",f);
+ $("song").textContent="⏳ Uploading "+f.name+"…";
+ const r=await fetch(`${BACKEND}/api/upload/${room}`,{method:"POST",body:fd});
+ const j=await r.json();if(!r.ok)return alert(j.error||"Upload failed.");
+ setSong(j.song);
+};
+
+$("play").onclick=()=>{
+ if(!player.src)return alert("Host must select music first.");
+ if(!host)return alert("Only the host controls playback.");
+ const startAt=now()+1200;
+ send({type:"sync",playing:true,position:player.currentTime,startAt});
+ setTimeout(()=>{player.currentTime=Number(player.currentTime)||0;player.play().catch(()=>{})},Math.max(0,startAt-now()));
+};
+$("pause").onclick=()=>{
+ if(!host)return alert("Only the host controls playback.");
+ player.pause();send({type:"sync",playing:false,position:player.currentTime});
+};
+player.onseeked=()=>{if(host)send({type:"sync",playing:!player.paused,position:player.currentTime})};
+
+setInterval(()=>{if(ready)send({type:"ping",clientAt:Date.now()})},5000);
+
+const q=new URLSearchParams(location.search).get("room");
+if(q){$("roomInput").value=q.toUpperCase();$("joinBox").classList.remove("hidden")}
+})();
+</script>
+</body>
+</html>
